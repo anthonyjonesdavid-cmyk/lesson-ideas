@@ -1,0 +1,8 @@
+# Local only — do not commit
+shots/
+old/
+.reponame
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/

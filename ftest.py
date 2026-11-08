@@ -1,0 +1,117 @@
+import json
+from playwright.sync_api import sync_playwright
+URL='http://localhost:8765/'
+errors=[]; results=[]
+def ok(name,cond,extra=''):
+    results.append(('PASS' if cond else 'FAIL',name,extra)); print('PASS' if cond else 'FAIL',name,extra)
+with sync_playwright() as p:
+    b=p.chromium.launch()
+    ctx=b.new_context(viewport={'width':820,'height':1180},device_scale_factor=2,accept_downloads=True)
+    pg=ctx.new_page()
+    pg.on('console', lambda m: errors.append(f'console.{m.type}: {m.text}') if m.type in ('error','warning') else None)
+    pg.on('pageerror', lambda e: errors.append(f'pageerror: {e}'))
+    pg.goto(URL); pg.wait_for_selector('.view.current .tile'); pg.wait_for_timeout(500)
+    t=lambda: pg.inner_text('#pgText')
+    # tap edge
+    box=pg.locator('#book').bounding_box()
+    pg.mouse.click(box['x']+box['width']-20, box['y']+box['height']*0.5); pg.wait_for_timeout(1000)
+    ok('tap right edge flips', t()=='Page 2 of 3', t())
+    pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(1000); ok('arrow left flips back', t()=='Page 1 of 3', t())
+    # ADD
+    pg.click('.fab'); pg.wait_for_selector('#lessonForm')
+    pg.click('#saveBtn'); ok('title required validation', pg.locator('#fTitle.bad').count()==1)
+    pg.fill('#fi-title','Apple Tasting Graph')
+    pg.click('#secPick [data-sec="math"]'); pg.click('#secPick [data-sec="science"]')
+    pg.fill('#fi-sum','Students taste red, green and yellow apples and graph their favorite.')
+    pg.fill('#fi-mat','Red, green & yellow apples\nPaper plates\nGraph chart')
+    pg.fill('#fi-steps','1. Slice apples\n2. Taste each color\n3. Vote with a sticky note\n4. Count and compare')
+    pg.fill('#fi-notes','Check allergies!')
+    pg.click('#tagPick [data-t="Fall"]')
+    pg.fill('#fi-newtag','Apples'); pg.click('#addTagBtn')
+    ok('new tag created & selected', pg.locator('#tagPick [data-t="Apples"][aria-pressed="true"]').count()==1)
+    pg.set_input_files('#fi-photo','icon-512.png'); pg.wait_for_selector('.photo-prev img')
+    pg.wait_for_timeout(200)
+    pg.screenshot(path='shots/ipad-portrait-6-add-form-filled.png')
+    pg.click('#saveBtn'); pg.wait_for_timeout(900)
+    title=pg.inner_text('#tbTitle'); cur=pg.locator('.view.current .lesson .ls-title').first.inner_text()
+    ok('added lesson shown in its section', title=='Science' and 'Apple Tasting Graph' in cur, f'{title} / {cur}')
+    ok('mine badge', pg.locator('.view.current .badge.mine').count()==1)
+    ok('photo shown', pg.locator('.view.current .polaroid img').count()==1)
+    pg.screenshot(path='shots/ipad-portrait-7-my-lesson.png')
+    # EDIT
+    pg.click('.view.current [data-act="edit"]'); pg.wait_for_selector('#lessonForm')
+    pg.fill('#fi-title','Apple Tasting Graph Day'); pg.click('#saveBtn'); pg.wait_for_timeout(700)
+    ok('edit saved', 'Apple Tasting Graph Day' in pg.locator('.view.current .ls-title').first.inner_text())
+    # FAV
+    pg.click('.view.current [data-act="fav"]'); pg.wait_for_timeout(300)
+    ok('fav toggled', pg.locator('.view.current [data-act="fav"][aria-pressed="true"]').count()==1)
+    # TAG filter
+    pg.click('.view.current .chip[data-tag="Apples"]'); pg.wait_for_timeout(600)
+    ok('tag book opened', pg.inner_text('#tbTitle')=='#Apples' and t()=='Page 1 of 3', pg.inner_text('#tbTitle')+' '+t())
+    pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(1000)
+    ok('tag book lesson', 'Apple Tasting' in pg.locator('.view.current .ls-title').first.inner_text())
+    pg.click('#homeBtn'); pg.wait_for_timeout(400)
+    pg.click('.view.current .tile[data-id="holidays"]'); pg.wait_for_timeout(400)
+    pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(900); pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(900)
+    pg.click('.view.current .chip[data-tag="Halloween"]'); pg.wait_for_timeout(600)
+    n=pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')
+    ok('Halloween tag filter', n>=3, f'{n} lessons')
+    pg.screenshot(path='shots/ipad-portrait-8-tag-cover.png')
+    # Favorites
+    pg.click('#homeBtn'); pg.wait_for_timeout(400); pg.click('.view.current [data-act="open-fav"]'); pg.wait_for_timeout(500)
+    ok('favorites book has 1', pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')==1)
+    # SEARCH
+    pg.click('[data-act="search"]'); pg.fill('#q','pumpkin'); pg.wait_for_timeout(300)
+    rc=pg.locator('.res').count(); ok('search results', rc>=2, f'{rc}')
+    pg.screenshot(path='shots/ipad-portrait-9-search.png')
+    pg.click('.res >> nth=0'); pg.wait_for_timeout(600)
+    ok('search result opens lesson', pg.locator('.view.current .lesson').count()>=1)
+    # EXPORT
+    pg.click('[data-act="settings"]'); pg.wait_for_selector('#expBtn')
+    with pg.expect_download() as dl: pg.click('#expBtn')
+    d=dl.value; path='/tmp/backup.json'; d.save_as(path)
+    data=json.load(open(path)); mine=[l for l in data['lessons'] if l.get('mine')]
+    ok('export JSON', len(data['lessons'])==50 and len(mine)==1 and mine[0]['photo'].startswith('data:image/jpeg'), f"{len(data['lessons'])} lessons, photo {len(mine[0]['photo'])//1024}KB")
+    pg.screenshot(path='shots/ipad-portrait-10-settings.png')
+    pg.click('.msheet [data-close].btn'); pg.wait_for_timeout(300)
+    # HIDE starter
+    pg.click('#homeBtn'); pg.wait_for_timeout(300); pg.click('.view.current .tile[data-id="math"]'); pg.wait_for_timeout(300)
+    pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(900)
+    first=pg.locator('.view.current .ls-title').first.inner_text()
+    nmath=pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')
+    pg.click('.view.current [data-act="edit"]'); pg.click('#hideBtn'); pg.click('[data-ok]'); pg.wait_for_timeout(700)
+    ok('starter hidden', pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')==nmath-1, first)
+    pg.click('[data-act="settings"]'); pg.wait_for_selector('[data-unhide]'); pg.click('[data-unhide]'); pg.wait_for_timeout(400)
+    pg.click('.msheet [data-close].btn'); pg.wait_for_timeout(300)
+    ok('starter unhidden', pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')==nmath)
+    # edit starter -> edited badge, reset
+    pg.click('.view.current [data-act="edit"]'); pg.fill('#fi-title','Number Line Hop!!'); pg.click('#saveBtn'); pg.wait_for_timeout(600)
+    ok('starter edited badge', pg.locator('.view.current .badge.edited').count()==1)
+    pg.click('.view.current [data-act="edit"]'); pg.click('#resetBtn'); pg.click('[data-ok]'); pg.wait_for_timeout(600)
+    ok('starter reset', pg.locator('.view.current .ls-title').first.inner_text().strip()=='Number Line Hop')
+    # DELETE mine
+    pg.click('#homeBtn'); pg.wait_for_timeout(300); pg.click('.view.current [data-act="open-mine"]'); pg.wait_for_timeout(400)
+    pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(900)
+    pg.click('.view.current [data-act="edit"]'); pg.click('#delBtn'); pg.wait_for_timeout(200)
+    pg.screenshot(path='shots/ipad-portrait-11-delete-confirm.png')
+    pg.click('[data-ok]'); pg.wait_for_timeout(700)
+    ok('deleted', pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')==0)
+    # IMPORT
+    pg.click('[data-act="settings"]'); pg.wait_for_selector('#impFile', state='attached')
+    pg.set_input_files('#impFile', path); pg.wait_for_selector('[data-ok]'); pg.click('[data-ok]'); pg.wait_for_timeout(900)
+    ok('import restored my lesson', pg.evaluate('window.__lm.cur.book.pages.filter(p=>p.t==="lesson").length')==1)
+    # RELOAD persistence + hash routing
+    pg.click('#homeBtn'); pg.wait_for_timeout(300); pg.click('.view.current .tile[data-id="science"]'); pg.wait_for_timeout(300)
+    pg.keyboard.press('ArrowRight'); pg.wait_for_timeout(900)
+    h=pg.evaluate('location.hash'); pg.reload(); pg.wait_for_selector('.view.current'); pg.wait_for_timeout(600)
+    ok('reload keeps place & data', pg.evaluate('location.hash')==h and 'Apple Tasting Graph Day' in pg.locator('.view.current .ls-title').first.inner_text(), h)
+    pg.go_back(); pg.wait_for_timeout(600); ok('browser back works', pg.locator('.view.current').count()==1, pg.evaluate('location.hash'))
+    # persist / sw
+    pg.wait_for_timeout(1000)
+    ok('service worker registered', pg.evaluate('navigator.serviceWorker.getRegistration().then(r=>!!r)'))
+    # offline reload
+    ctx.set_offline(True); pg.reload(); pg.wait_for_selector('.view.current', timeout=8000); ok('works offline after load', pg.locator('.view.current').count()==1)
+    ctx.set_offline(False)
+    b.close()
+print('ERRORS:',json.dumps(errors,indent=1))
+print('FAILS:',[r for r in results if r[0]=='FAIL'])

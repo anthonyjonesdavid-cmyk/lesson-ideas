@@ -1,0 +1,12 @@
+{
+  "name": "lesson-idea-magazine",
+  "private": true,
+  "description": "Lesson Ideas — flip-through first-grade lesson magazine (static web app)",
+  "scripts": {
+    "build": "node build.js",
+    "icons": "python3 make_icons.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
